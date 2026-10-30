@@ -1,0 +1,88 @@
+name: W-Bot07
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'
+
+concurrency:
+  group: W-Bot07-runner
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Initial 25s delay
+        run: sleep 25
+
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore session branch
+        run: |
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          REPO="${{ github.repository }}"
+          if git clone --branch session --single-branch "https://x-access-token:${TOKEN}@github.com/${REPO}.git" session_bot 2>/dev/null; then
+            echo "✅ Restored session from 'session' branch"
+          else
+            echo "ℹ️ No 'session' branch — creating empty session_bot"
+            rm -rf session_bot
+            mkdir -p session_bot
+            cd session_bot
+            git init -q
+            git checkout -q -b session
+            git remote add origin "https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+            cd ..
+          fi
+          ls -la session_bot || true
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Start background session saver (every 240s)
+        run: |
+          (
+            while true; do
+              sleep 240
+              if [ -f session_bot/creds.json ]; then
+                cd session_bot
+                git config user.email "bot@users.noreply.github.com"
+                git config user.name "W-Bot07"
+                git add -A
+                git commit -m "session sync $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+                git push --force origin session || true
+                cd ..
+              fi
+            done
+          ) &
+
+      - name: Run WhatsApp bot
+        timeout-minutes: 335
+        run: node index.js
+
+      - name: Save session (always)
+        if: always()
+        run: |
+          if [ -d session_bot ] && [ -f session_bot/creds.json ]; then
+            cd session_bot
+            git config user.email "bot@users.noreply.github.com"
+            git config user.name "W-Bot07"
+            git add -A
+            git commit -m "final session save $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+            git push --force origin session || true
+            echo "✅ Session saved"
+          else
+            echo "ℹ️ No creds.json — skipping session save"
+          fi
